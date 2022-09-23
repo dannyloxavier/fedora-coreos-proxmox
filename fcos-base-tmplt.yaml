@@ -21,7 +21,8 @@
           trap 'catch $?' EXIT
 
           CIPATH=/run/cloudinit
-          YQ="yq read --exitStatus --printMode v --stripComments --"
+          #YQ="yq read --exitStatus --printMode v --stripComments --" #DEPRECATED
+          YQ="/usr/local/bin/yq -e -r"
 
           # ===================================================================================
           # functions()
@@ -67,13 +68,13 @@
           [[ "x${1}" == "xsysprep" ]]&& sysprep
 
           setup_yq() {
-            local VER=3.4.1
+            local VER=4.27.5
 
-            [[ -x /usr/bin/wget ]]&& download_command="wget --quiet --show-progress --output-document"  || download_command="curl -s --location --output"
+            [[ -x /usr/bin/wget ]]&& download_command="wget --quiet --show-progress --output-document"  || download_command="curl --location --output"
             [[ -x /usr/local/bin/yq ]]&& [[ "x$(/usr/local/bin/yq --version | awk '{print $NF}')" == "x${VER}" ]]&& return 0
             echo "Setup yaml parser tools yq..."
             rm -f /usr/local/bin/yq
-            ${download_command} /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/${VER}/yq_linux_amd64
+            ${download_command} /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v${VER}/yq_linux_amd64
             chmod 755 /usr/local/bin/yq
           }
           setup_yq
@@ -111,7 +112,7 @@
             exit 1
           }
 
-          cloudinit_instanceid="$(${YQ} ${CIPATH}/meta-data 'instance-id')"
+          cloudinit_instanceid="$(${YQ} '.instance-id' ${CIPATH}/meta-data )"
           if [[ -e /var/.cloudinit ]]
           then
             [[ "x$(cat /var/.cloudinit)" == "x${cloudinit_instanceid}" ]]&& {
@@ -120,7 +121,7 @@
             }
 
             # hostname
-            NEWHOSTNAME="$(${YQ} ${CIPATH}/user-data 'hostname' 2> /dev/null)"
+            NEWHOSTNAME="$(${YQ} '.hostname' ${CIPATH}/user-data 2> /dev/null)"
             [[ -n "${NEWHOSTNAME}" ]]&& [[ "x${NEWHOSTNAME,,}" != "x$(hostname)" ]]&& {
               echo -n "[INFO]: Cloudinit: set hostname to ${NEWHOSTNAME,,}... "
               hostnamectl set-hostname ${NEWHOSTNAME,,} || { echo "[failed]"; exit 1; }
@@ -128,7 +129,7 @@
               echo "[done]"
             }
             # username
-            NEWUSERNAME="$(${YQ} ${CIPATH}/user-data 'user' 2> /dev/null)" || true # cant be empty if no cloudinit user defined
+            NEWUSERNAME="$(${YQ} '.user' ${CIPATH}/user-data 2> /dev/null)" || true # cant be empty if no cloudinit user defined
             [[ "x${NEWUSERNAME}" == "x" ]] && NEWUSERNAME="admin" # NEWUSERNAME="core" use "admin" on geco-template
             getent passwd ${NEWUSERNAME} &> /dev/null || {
               echo -n "[INFO]: Cloudinit: add sytem user: ${NEWUSERNAME}... "
@@ -137,7 +138,7 @@
               echo "[done]"
             }
             # passwd
-            NEWPASSWORD="$(${YQ} ${CIPATH}/user-data 'password' 2> /dev/null)"
+            NEWPASSWORD="$(${YQ} '.password' ${CIPATH}/user-data 2> /dev/null)"
             [[ -n "${NEWPASSWORD}" ]]&& [[ "x${NEWPASSWORD}" != "x$(grep ^${NEWUSERNAME} /etc/shadow | awk -F: '{print $2}')" ]]&& {
               echo -n "[INFO]: Cloudinit: set password for user ${NEWUSERNAME}... "
               sed -e "/^${NEWUSERNAME}/d" -i /etc/shadow &> /dev/null || { echo "[failed]"; exit 1; }
@@ -155,24 +156,24 @@
                       --mode=0600 /dev/null /var/home/${NEWUSERNAME}/.ssh/authorized_keys.d/ignition &> /dev/null || { echo "[failed]"; exit 1; }
             }
             echo -n "[INFO]: Cloudinit: wrote ssh authorized keys file for user: ${NEWUSERNAME}... "
-            ${YQ} ${CIPATH}/user-data 'ssh_authorized_keys[*]' > /var/home/${NEWUSERNAME}/.ssh/authorized_keys.d/ignition 2> /dev/null || { echo "[failed]"; exit 1; }
+            ${YQ} '.ssh_authorized_keys | select (. != null)' ${CIPATH}/user-data > /var/home/${NEWUSERNAME}/.ssh/authorized_keys.d/ignition 2> /dev/null || { echo "[failed]"; exit 1; }
             echo "[done]"
             # Network => ipv6: TODO
-            netcards="$(${YQ} ${CIPATH}/network-config 'config[*].name' 2> /dev/null | wc -l)"
-            nameservers="$(${YQ} ${CIPATH}/network-config "config[${netcards}].address[*]" 2> /dev/null | paste -s -d ";" -)"
-            searchdomain="$(${YQ} ${CIPATH}/network-config "config[${netcards}].search[*]" 2> /dev/null | paste -s -d ";" -)"
+            netcards="$(${YQ} '.config[].name | select (. != null)' ${CIPATH}/network-config 2> /dev/null | wc -l)"
+            nameservers="$(${YQ} ".config[${netcards}].address" ${CIPATH}/network-config 2> /dev/null | sed -Ee "s@(- |')@@g" | paste -s -d ';' -)"
+            searchdomain="$(${YQ} ".config[${netcards}].search" ${CIPATH}/network-config 2> /dev/null | sed -Ee "s@(- |')@@g" | paste -s -d ';' -)"
             echo "[INFO]: Cloudinit: DNS Server=$nameservers - DNS Search=$searchdomain"
             for (( i=O; i<${netcards}; i++ )); do
               ipv4="" netmask="" gw="" macaddr="" # reset on each run
-              ipv4="$(${YQ} ${CIPATH}/network-config config[${i}].subnets[0].address 2> /dev/null)" || {
+              ipv4="$(${YQ} ".config[${i}].subnets[0].address" ${CIPATH}/network-config 2> /dev/null)" || {
                 [[ -e /etc/NetworkManager/system-connections/net${i}.nmconnection ]]&& MUST_NETWORK_RELOAD=true
                 rm -f /etc/NetworkManager/system-connections/net${i}.nmconnection
                 continue # dhcp mode
               }
-              netmask="$(${YQ} ${CIPATH}/network-config config[${i}].subnets[0].netmask 2> /dev/null)"
+              netmask="$(${YQ} .config[${i}].subnets[0].netmask ${CIPATH}/network-config 2> /dev/null)"
               cidr="$(mask2cdr ${netmask})"
-              gw="$(${YQ} ${CIPATH}/network-config config[${i}].subnets[0].gateway 2> /dev/null)" || true # can be empty
-              macaddr="$(${YQ} ${CIPATH}/network-config config[${i}].mac_address 2> /dev/null)"
+              gw="$(${YQ} .config[${i}].subnets[0].gateway ${CIPATH}/network-config 2> /dev/null)" || true # can be empty
+              macaddr="$(${YQ} .config[${i}].mac_address ${CIPATH}/network-config 2> /dev/null)"
               echo "[INFO]: Cloudinit: NET$i IPv4 Network: IP=${ipv4}/${netmask} - GW=${gw:-none} - MAC=${macaddr}"
               rm -f /etc/NetworkManager/system-connections/default_connection.nmconnection # remove default connexion settings
               if [[ -e /etc/NetworkManager/system-connections/net${i}.nmconnection ]]
@@ -240,6 +241,9 @@
           # to hide audit messages from the interactive console
           kernel.printk=4
 
+
+systemd:
+  units:
 # geco-cloudinit: apply cloudinit settings on boot
     - name: geco-cloudinit.service
       enabled: true
@@ -272,6 +276,7 @@
         [Service]
         Type=oneshot
         RemainAfterExit=yes
+        Before=boot-complete.target
         ExecStart=/bin/rpm-ostree install qemu-guest-agent
         ExecStart=/bin/touch /var/lib/qemu-guest-agent.stamp
         ExecStart=/bin/systemctl --no-block reboot

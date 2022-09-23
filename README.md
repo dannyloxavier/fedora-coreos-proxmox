@@ -2,6 +2,18 @@
 
 Fedora CoreOS template for proxmox with cloudinit support
 
+## UPDATED 2022
+
+With:
+- new Fedora CoreOS
+- new yq (with revisited commands)
+- new ignition version
+
+Dependences to run on proxmox:
+- git
+- cloud-init
+- wget or curl
+
 ## Create FCOS VM Template
 
 ### Configuration
@@ -9,8 +21,8 @@ Fedora CoreOS template for proxmox with cloudinit support
 * **vmsetup.sh**
 
 ```
-TEMPLATE_VMID="1000"                     # Template Proxmox VMID 
-TEMPLATE_VMSTORAGE="thin-ssd"           # Proxmox storage  
+TEMPLATE_VMID="900"                     # Template Proxmox VMID
+TEMPLATE_VMSTORAGE="local-lvm"          # Proxmox storage
 SNIPPET_STORAGE="local"                 # Snippets storage for hook and ignition file
 VMDISK_OPTIONS=",discard=on"            # Add options to vmdisk
 ```
